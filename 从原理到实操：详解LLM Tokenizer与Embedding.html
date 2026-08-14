@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>从原理到实操：详解LLM Tokenizer与Embedding</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background: #f8f9fa;
+            color: #1e293b;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.8;
+            padding: 2rem 1rem;
+        }
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            background: white;
+            padding: 2.5rem 2.8rem;
+            border-radius: 16px;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.08);
+        }
+        h1 {
+            font-size: 2.4rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            border-bottom: 4px solid #3b82f6;
+            padding-bottom: 0.6rem;
+            margin-bottom: 1.8rem;
+            color: #0f172a;
+        }
+        h2 {
+            font-size: 1.8rem;
+            font-weight: 600;
+            margin-top: 2.8rem;
+            margin-bottom: 1.2rem;
+            padding-left: 0.5rem;
+            border-left: 5px solid #3b82f6;
+            color: #0f172a;
+        }
+        h3 {
+            font-size: 1.4rem;
+            font-weight: 600;
+            margin-top: 2rem;
+            margin-bottom: 0.8rem;
+            color: #1e293b;
+        }
+        h4 {
+            font-size: 1.2rem;
+            font-weight: 600;
+            margin-top: 1.6rem;
+            margin-bottom: 0.6rem;
+            color: #334155;
+        }
+        p {
+            margin-bottom: 1.2rem;
+            text-align: justify;
+        }
+        ul, ol {
+            margin: 0.8rem 0 1.2rem 1.8rem;
+        }
+        li {
+            margin-bottom: 0.4rem;
+        }
+        code {
+            background: #eef2f6;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            font-family: "JetBrains Mono", "Fira Code", monospace;
+            color: #0b3b5c;
+        }
+        pre {
+            background: #0f172a;
+            color: #e2e8f0;
+            padding: 1.5rem;
+            border-radius: 10px;
+            overflow-x: auto;
+            font-size: 0.9rem;
+            line-height: 1.6;
+            margin: 1.2rem 0;
+            font-family: "JetBrains Mono", "Fira Code", monospace;
+        }
+        pre code {
+            background: none;
+            color: inherit;
+            padding: 0;
+            font-size: 0.9rem;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1.2rem 0;
+            font-size: 0.95rem;
+        }
+        th {
+            background: #1e293b;
+            color: white;
+            padding: 0.7rem 0.8rem;
+            text-align: left;
+            font-weight: 600;
+        }
+        td {
+            border: 1px solid #d1d9e6;
+            padding: 0.7rem 0.8rem;
+            vertical-align: top;
+        }
+        tr:nth-child(even) {
+            background: #f8fafc;
+        }
+        .highlight-box {
+            background: #eef6ff;
+            border-left: 6px solid #3b82f6;
+            padding: 1rem 1.5rem;
+            margin: 1.5rem 0;
+            border-radius: 0 8px 8px 0;
+        }
+        .highlight-box strong {
+            color: #1e4a7a;
+        }
+        .math {
+            font-family: "Times New Roman", "STIX", serif;
+            font-style: italic;
+            font-size: 1.05rem;
+            background: none;
+            padding: 0 0.1rem;
+        }
+        hr {
+            border: none;
+            border-top: 2px dashed #d1d9e6;
+            margin: 2.5rem 0;
+        }
+        .toc {
+            background: #f1f5f9;
+            padding: 1.2rem 1.8rem;
+            border-radius: 10px;
+            margin-bottom: 2rem;
+        }
+        .toc a {
+            text-decoration: none;
+            color: #2563eb;
+        }
+        .toc a:hover {
+            text-decoration: underline;
+        }
+        @media (max-width: 700px) {
+            .container {
+                padding: 1.2rem;
+            }
+            h1 { font-size: 1.8rem; }
+            h2 { font-size: 1.4rem; }
+            table { font-size: 0.85rem; }
+            pre { font-size: 0.8rem; padding: 1rem; }
+        }
+        .footer-note {
+            margin-top: 2.5rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid #e2e8f0;
+            color: #64748b;
+            font-size: 0.9rem;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+
+    <h1>从原理到实操：详解LLM Tokenizer与Embedding</h1>
+
+    <div class="toc">
+        <strong>📖 目录</strong>
+        <ul style="margin-top: 0.5rem; columns: 2; list-style: none; padding-left: 0;">
+            <li>· <a href="#intro">引言：大模型不认识文字</a></li>
+            <li>· <a href="#part1">1. Tokenizer是什么？</a></li>
+            <li>· <a href="#part2">2. 四大核心算法深度解析</a></li>
+            <li>· <a href="#part3">3. 实战工具箱</a></li>
+            <li>· <a href="#part4">4. 深入硬核机制：RoPE与KV Cache</a></li>
+            <li>· <a href="#part5">5. 商业模型对比与计费陷阱</a></li>
+            <li>· <a href="#part6">6. 从ID到Vector：Embedding本质</a></li>
+            <li>· <a href="#part7">7. 交叉熵的精准角色</a></li>
+            <li>· <a href="#part8">8. 一致性铁律与故障排查</a></li>
+            <li>· <a href="#conclusion">结语：完整数据流状态机</a></li>
+        </ul>
+    </div>
+
+    <h2 id="intro">引言：大模型不认识文字</h2>
+    <p>当你向ChatGPT提问“今天天气怎么样”时，模型内部实际发生的事情，和你想象的可能完全不同。</p>
+    <p><strong>大语言模型（LLM）不认识任何文字。</strong> 它只认识数字——准确地说，是浮点数组成的向量。人类书写的“今天天气怎么样”这七个汉字，在进入模型的第一道门前，必须经历一场彻底的“翻译”：先被切成碎片（Tokenization），再被翻译成ID（Token ID），最后被映射成向量（Embedding）。这三步，决定了模型“看到”的世界长什么样，更直接决定了你的<strong>GPU账单</strong>和<strong>推理延迟</strong>。</p>
+    <p>本文将从算法原理、工程实操、数学本质到生产故障排查，为你系统拆解这条“从文字到向量”的必经之路。全文无任何删减，逐层深入。</p>
+
+    <h2 id="part1">第一部分：Tokenizer是什么？为什么需要？</h2>
+    <h3>1.1 核心定义</h3>
+    <p><strong>Tokenizer（分词器）</strong> 是连接“人类文本”与“机器数字”的编译与解码系统。</p>
+    <ul>
+        <li><strong>编码（Encode）</strong>：自然语言 → 切分为子词片段（Token）→ 映射为整数ID。</li>
+        <li><strong>解码（Decode）</strong>：整数ID列表 → 反向映射回人类可读的字符串。</li>
+    </ul>
+    <p>Tokenizer是LLM的第一层，也是最后一层——模型输入必须经过它，模型输出也必须经过它才能变成你能读懂的句子。</p>
+
+    <h3>1.2 为什么不能直接处理文字？</h3>
+    <ul>
+        <li><strong>字符级（Char-level）</strong>：按单个字符切分（如"H-e-l-l-o"），序列长度急剧增加（Transformer计算复杂度随长度平方增长），且单个字符语义信息太弱，难以构建“词根”等高阶语义。</li>
+        <li><strong>单词级（Word-level）</strong>：按空格切分，词表无限大（英文中“run/running/runner”均算不同词），导致Embedding矩阵内存爆炸，且遇到训练集外的生僻词（OOV）直接报错。</li>
+        <li><strong>结论</strong>：必须采用<strong>子词分词（Subword Tokenization）</strong>，在固定词表大小和无限覆盖力之间取得最佳平衡。</li>
+    </ul>
+
+    <h2 id="part2">第二部分：四大核心算法深度解析（含完整数学推导与推演）</h2>
+
+    <h3>2.1 BPE（Byte Pair Encoding）——最流行的选择</h3>
+    <p>BPE最初是一种<strong>数据压缩算法</strong>，后被OpenAI引入NLP。核心逻辑：<strong>统计相邻字符对（或字节对）的出现频率，将频次最高者合并为一个新Token，反复迭代直到词表达到预设的 <code>vocab_size</code>。</strong></p>
+
+    <h4>2.1.1 “目标大小”的工程决策依据</h4>
+    <p><code>vocab_size</code> 是人为设定的超参数，由三项权衡决定：</p>
+    <ol>
+        <li><strong>压缩效率（序列长度）</strong>：词表越大，单个Token覆盖的字符越多，输入序列越短，Transformer计算越快。业界追求的理想压缩比为 <strong>3~5 字符/Token</strong>。</li>
+        <li><strong>显存与参数量</strong>：Embedding矩阵为 <code>vocab_size × hidden_dim</code>。若 <code>hidden_dim=4096</code>，词表从50K扩至100K，仅嵌入层就增加约 <strong>2.05亿参数</strong>，显存占用陡增。</li>
+        <li><strong>低频Token稀疏性风险</strong>：词表过大时，许多低频Token（如生僻字）在整个训练语料中出现次数极少，模型无法为其学到稳定的向量表示，造成词表容量的“浪费”。</li>
+    </ol>
+
+    <h4>2.1.2 BPE完整训练推演</h4>
+    <p>假设训练语料包含以下五个词及其出现频率（次数）：</p>
+    <table>
+        <tr><th>单词</th><th>频率</th></tr>
+        <tr><td>hug</td><td>10</td></tr>
+        <tr><td>pug</td><td>5</td></tr>
+        <tr><td>pun</td><td>12</td></tr>
+        <tr><td>bun</td><td>4</td></tr>
+        <tr><td>hugs</td><td>5</td></tr>
+    </table>
+
+    <p><strong>第0步（初始化）</strong>：将所有单词拆分为单个字符，并在词尾加上结束符 <code>&lt;/w&gt;</code> 以区分词边界。初始词汇表为 <code>["b", "g", "h", "n", "p", "s", "u"]</code>。</p>
+    <p>语料库表示为：</p>
+    <ul>
+        <li><code>("h" "u" "g" "&lt;/w&gt;", 10)</code></li>
+        <li><code>("p" "u" "g" "&lt;/w&gt;", 5)</code></li>
+        <li><code>("p" "u" "n" "&lt;/w&gt;", 12)</code></li>
+        <li><code>("b" "u" "n" "&lt;/w&gt;", 4)</code></li>
+        <li><code>("h" "u" "g" "s" "&lt;/w&gt;", 5)</code></li>
+    </ul>
+
+    <p><strong>第1次合并</strong>：统计相邻符号对频次，<code>("u","g")</code> 出现20次（最高），合并为 <code>"ug"</code>。新词汇表：<code>["b","g","h","n","p","s","u","ug"]</code>。</p>
+    <p><strong>第2次合并</strong>：<code>("u","n")</code> 出现16次（最高），合并为 <code>"un"</code>。词表增加 <code>"un"</code>。</p>
+    <p><strong>第3次合并</strong>：<code>("h","ug")</code> 出现15次，合并为 <code>"hug"</code>。词表增加 <code>"hug"</code>。</p>
+    <p>如此反复执行预设的 <code>num_merges</code>（例如50,001次）后，BPE算法终止。最终，像 <code>"hugging"</code> 这样的未见词会被贪心匹配切分为 <code>["hug", "g", "ing"]</code>（如果"ing"在后续合并中出现）。</p>
+
+    <h3>2.2 Byte-level BPE——全面消灭“未知Token”</h3>
+    <p>传统BPE直接处理Unicode字符，遇到生僻字或Emoji会标记为 <code>&lt;unk&gt;</code>。Byte-level BPE先将文本转为 <strong>UTF-8字节序列</strong>（0~255），再在这些<strong>字节</strong>上运行BPE。</p>
+    <ul>
+        <li><code>'a'</code> → <code>[97]</code>（1字节）</li>
+        <li><code>'中'</code> → <code>[228, 184, 173]</code>（3字节）</li>
+        <li><code>'😂'</code> → <code>[240, 159, 152, 128]</code>（4字节）</li>
+    </ul>
+    <p>初始词表固定为256个单字节，后续合并不断扩充。彻底消灭OOV，任何输入均可无损编码。</p>
+
+    <h3>2.3 WordPiece——BERT选择的“似然最大化”准则</h3>
+    <p>WordPiece由Google提出，与BPE同属“自底向上”合并，但判决标准不同：</p>
+    <ul>
+        <li><strong>BPE</strong>：选择<strong>频次最高</strong>的相邻对。</li>
+        <li><strong>WordPiece</strong>：选择<strong>能够最大程度提升训练数据似然概率</strong>的相邻对。数学上近似最大化 <span class="math">log(P(z) / (P(x)·P(y)))</span>。</li>
+    </ul>
+    <p>WordPiece在分词时用 <code>##</code> 前缀标记内部子词，例如 <code>"unbelievable"</code> → <code>["un", "##believ", "##able"]</code>。</p>
+
+    <h3>2.4 Unigram——基于概率模型的“从顶向下”剪枝</h3>
+    <p>Unigram采用“大词表 → 逐步剪枝”策略：</p>
+    <ol>
+        <li>构建超大类词表（含所有可能子词）。</li>
+        <li>使用EM算法估计每个子词的概率。</li>
+        <li>计算删除某子词对整体损失的影响，删除影响最小者。</li>
+        <li>迭代至目标 <code>vocab_size</code>。</li>
+    </ol>
+    <p>推理时，使用 <strong>Viterbi动态规划</strong> 寻找全局最优切分路径，支持概率性分词（Subword Regularization），增强鲁棒性。</p>
+
+    <h3>2.5 SentencePiece——工业界的“万能工具包”</h3>
+    <p><strong>SentencePiece不是算法，而是工程框架</strong>，封装了BPE和Unigram，解决传统Tokenizer的痛点：</p>
+    <ul>
+        <li><strong>无需预分词</strong>：将空格映射为特殊字符 <code>▁</code>，完美适配中文/日文。</li>
+        <li><strong>完全可逆</strong>：解码时还原空格，不丢失信息。</li>
+    </ul>
+    <p><strong>核心配置参数</strong>：<code>--model_type</code>（bpe/unigram）、<code>--vocab_size</code>、<code>--character_coverage</code>（推荐0.9995~1.0）、<code>--byte_fallback</code>（必须设为true）、<code>--split_by_whitespace</code>（处理中文时false）。LLaMA系列即采用此工具包，<code>vocab_size=128,256</code>。</p>
+
+    <h2 id="part3">第三部分：实战工具箱（可直接复制执行的代码）</h2>
+
+    <h3>3.1 训练一个属于你自己的SentencePiece词表</h3>
+    <pre><code>pip install sentencepiece
+
+spm_train \
+  --input=corpus.txt \
+  --model_prefix=my_llm_tokenizer \
+  --vocab_size=32000 \
+  --character_coverage=0.9995 \
+  --model_type=bpe \
+  --byte_fallback=true \
+  --input_sentence_size=1000000 \
+  --split_by_whitespace=false</code></pre>
+
+    <h3>3.2 在生产环境中加载并验证Tokenizer</h3>
+    <pre><code>from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
+text = "今天天气真好，我们一起去公园吧！"
+ids = tokenizer.encode(text)
+print(f"Token IDs: {ids}")
+print(f"解码还原: {tokenizer.decode(ids)}")
+compression_ratio = len(text) / len(ids)
+print(f"压缩比: {compression_ratio:.2f} 字符/Token")</code></pre>
+
+    <h3>3.3 批量实测压缩比（评估选型成本的黄金标准）</h3>
+    <pre><code>import numpy as np
+from transformers import AutoTokenizer
+from tqdm import tqdm
+
+def measure_compression_ratio(tokenizer, texts, sample_size=1000):
+    sampled = texts[:min(sample_size, len(texts))]
+    ratios = []
+    for text in tqdm(sampled, desc="测量压缩比"):
+        ids = tokenizer.encode(text)
+        ratios.append(len(text) / len(ids))
+    return {
+        "mean": np.mean(ratios),
+        "median": np.median(ratios),
+        "p25": np.percentile(ratios, 25),
+        "p75": np.percentile(ratios, 75),
+    }
+# 使用示例：stats = measure_compression_ratio(tokenizer, sample_texts)</code></pre>
+
+    <h3>3.4 原子性断言（防止词表不匹配导致线上崩溃）</h3>
+    <pre><code>def check_tokenizer_alignment(model_path, tokenizer):
+    from transformers import AutoConfig
+    config = AutoConfig.from_pretrained(model_path)
+    assert config.vocab_size == len(tokenizer), \
+        f"❌ 模型词表 {config.vocab_size} 与 Tokenizer 词表 {len(tokenizer)} 不匹配！"
+    test_text = "这是一段测试文本。"
+    try:
+        ids = tokenizer.encode(test_text)
+        tokenizer.decode(ids)
+    except Exception as e:
+        raise RuntimeError(f"❌ Tokenizer运行时验证失败: {e}")
+    print("✅ 所有对齐验证通过。")</code></pre>
+
+    <h2 id="part4">第四部分：深入硬核机制——RoPE与KV Cache</h2>
+
+    <h3>4.1 RoPE（旋转位置编码）的数学直觉</h3>
+    <p>RoPE将位置信息通过<strong>旋转矩阵</strong>嵌入到Query和Key中。对于位置 <span class="math">m</span> 的 <span class="math">q_m</span> 和位置 <span class="math">n</span> 的 <span class="math">k_n</span>，内积结果仅依赖于相对位置 <span class="math">(m-n)</span>，外推能力强。</p>
+    <p>二维旋转示意：每个维度对 (2d, 2d+1) 被旋转角度 <span class="math">m·θ</span>，使得 <span class="math">q_m · k_n = f(q,k, m-n)</span>。</p>
+
+    <h3>4.2 KV Cache——推理加速的“空间换时间”基石</h3>
+    <ul>
+        <li><strong>无Cache</strong>：每生成1个字需重算整个序列注意力，复杂度 <span class="math">O(n²)</span>。</li>
+        <li><strong>有KV Cache</strong>：缓存历史K/V，新Token只算自己的Q并与缓存K/V做注意力，复杂度 <span class="math">O(n)</span>。</li>
+        <li><strong>代价</strong>：显存占用随序列长度线性增长，长上下文推理显存爆炸的主因。</li>
+    </ul>
+
+    <h2 id="part5">第五部分：商业模型对比与“中英文计费陷阱”</h2>
+    <table>
+        <tr><th>模型</th><th>算法实现</th><th>词表大小</th><th>英文压缩比</th><th>中文压缩比</th><th>业务成本风险提示</th></tr>
+        <tr><td>GPT-4 (cl100k)</td><td>Byte-level BPE</td><td>~100K</td><td>~4.0</td><td>~1.8</td><td><strong>中文Prompt费用是英文的2.2倍</strong></td></tr>
+        <tr><td>LLaMA 3</td><td>BPE (SentencePiece)</td><td>128,256</td><td>~4.2</td><td>~2.0</td><td>对中文有优化但仍偏碎</td></tr>
+        <tr><td>Qwen2.5</td><td>BPE</td><td>~151K</td><td>~4.5</td><td>~2.5</td><td>专为中文优化，成本更低</td></tr>
+    </table>
+    <div class="highlight-box">
+        <strong>关键洞察：</strong>由于中文UTF-8占3个字节，BPE对中文的压缩能力天然弱于英文。<strong>同样的100个字符，中文产生的Token数几乎是英文的两倍。</strong>选型时必须针对自身业务语种进行压缩比实测（参见3.3节代码）。
+    </div>
+
+    <h2 id="part6">第六部分：从ID到Vector——Embedding层的数学本质</h2>
+    <h3>6.1 查表即矩阵乘法</h3>
+    <p>嵌入矩阵 <span class="math">E ∈ R<sup>V×d</sup></span>，输入One-hot向量 <span class="math">o<sub>i</sub></span>（仅第i位为1），则 <span class="math">v<sub>i</sub> = o<sub>i</sub> × E</span>，等价于直接索引第i行，无浮点计算。</p>
+
+    <h3>6.2 梯度如何更新Embedding？</h3>
+    <p>损失 <span class="math">L</span> 对 <span class="math">E</span> 的梯度： <span class="math">∂L/∂E = o<sub>i</sub><sup>T</sup> · (∂L/∂v<sub>i</sub>)</span>。由于 <span class="math">o<sub>i</sub></span> 只有第i位为1，梯度矩阵中<strong>只有第i行非零</strong>，其余全为0。</p>
+    <p>更新： <span class="math">E<sub>new</sub> = E<sub>old</sub> - η·∂L/∂E</span>。每次反向传播<strong>只更新当前Token对应的那一行</strong>。相似上下文导致不同Token（如“苹果”“香蕉”）的梯度方向趋同，最终在高维空间中靠近。</p>
+
+    <h2 id="part7">第七部分：交叉熵的精准角色（前向与反向的桥梁）</h2>
+    <p>预测下一个词 <span class="math">ID<sub>i+1</sub></span> 时：</p>
+    <ul>
+        <li><span class="math">ID<sub>i</sub></span> 决定取 <span class="math">v<sub>i</sub></span>（输入特征索引）。</li>
+        <li><span class="math">v<sub>i</sub></span> 经Transformer变为 <span class="math">h<sub>i</sub></span>。</li>
+        <li>输出映射： <span class="math">z<sub>i</sub> = h<sub>i</sub> · W</span>（Logits）。</li>
+        <li>交叉熵： <span class="math">L<sub>i</sub> = -log( exp(z<sub>i</sub>[ID<sub>i+1</sub>]) / Σ<sub>j</sub> exp(z<sub>i</sub>[j]) )</span>。</li>
+    </ul>
+    <p><strong>关键：</strong> <span class="math">ID<sub>i+1</sub></span> 仅作为标签索引从Logits中取分计算Loss；<span class="math">v<sub>i+1</sub></span> 绝不参与本次预测（因果掩码）。</p>
+
+    <h2 id="part8">第八部分：一致性铁律与生产级故障排查指南</h2>
+
+    <h3>8.1 三大不可违背的铁律</h3>
+    <ol>
+        <li><strong>词表与权重强绑定</strong>：训练与推理必须使用同一Tokenizer文件。</li>
+        <li><strong>推理时Embedding冻结</strong>：<code>requires_grad=False</code>，仅查表。</li>
+        <li><strong>算法逻辑必须一致</strong>：训练用BPE则推理也必须用BPE的合并规则。</li>
+    </ol>
+
+    <h3>8.2 常见生产报错与急救指南</h3>
+    <table>
+        <tr><th>报错现象</th><th>根本原因</th><th>解决方案</th></tr>
+        <tr><td><code>IndexError: index out of range</code></td><td>Tokenizer词表大小 > 模型配置的 <code>vocab_size</code></td><td>加载后立即执行对齐断言（见3.4节），更换配套Tokenizer文件。</td></tr>
+        <tr><td>生成文字全是 <code>�</code> 乱码</td><td>流式输出时每Token单独解码，多字节字符被截断</td><td>维护解码缓冲区，每次传入完整累积ID列表解码，截取增量返回。</td></tr>
+        <tr><td>微调后Loss不下降或生成重复</td><td>扩展词表时新Embedding未热启动或 <code>lm_head</code> 未同步</td><td>新词向量由相似旧词取平均初始化；<code>lm_head</code> 同步扩展并加噪声。</td></tr>
+        <tr><td>中文压缩比极低（<1.5）</td><td><code>byte_fallback</code> 未开启或 <code>character_coverage</code> 过低</td><td>重新训练Tokenizer，设置 <code>--byte_fallback=true</code> 和 <code>--character_coverage=1.0</code>。</td></tr>
+        <tr><td>Tokenizer版本漂移</td><td>模型仓库更新了 <code>tokenizer_config.json</code> 或 <code>merges.txt</code></td><td>固定<code>transformers</code>版本并锁定文件哈希；加载后对基准文本编码验证ID是否一致。</td></tr>
+    </table>
+
+    <h3>8.3 Tokenizer版本漂移的完整排查示例</h3>
+    <pre><code>BASELINE_TEXT = "这是一个用于版本漂移检测的固定文本。"
+EXPECTED_IDS = [101, 234, 567, ...]  # 从上一个稳定版本记录
+
+def detect_tokenizer_drift(tokenizer):
+    current_ids = tokenizer.encode(BASELINE_TEXT)
+    if current_ids != EXPECTED_IDS:
+        raise RuntimeError(f"❌ 漂移检测失败！预期前10ID: {EXPECTED_IDS[:10]}, 实际: {current_ids[:10]}")
+    print("✅ 版本一致性验证通过")</code></pre>
+
+    <h2 id="conclusion">结语：LLM完整数据流分层级状态机</h2>
+
+    <h3>第一阶段：预处理阶段（离线，仅训练）</h3>
+    <table>
+        <tr><th>步骤</th><th>操作层</th><th>输入</th><th>输出</th><th>计算类型</th><th>执行频率</th></tr>
+        <tr><td>①</td><td>原始语料加载</td><td>磁盘文件</td><td>UTF-8字节流</td><td>I/O</td><td>一次性</td></tr>
+        <tr><td>②</td><td><strong>Tokenizer编码</strong></td><td>字节流</td><td><strong>Token IDs</strong></td><td>CPU哈希查表</td><td><strong>全量执行一次，落盘</strong></td></tr>
+        <tr><td>③</td><td>持久化存储</td><td>Token IDs</td><td><code>.bin</code>/Arrow</td><td>序列化</td><td>保存后只读</td></tr>
+    </table>
+
+    <h3>第二阶段：推理Prefill阶段（处理Prompt）</h3>
+    <table>
+        <tr><th>步骤</th><th>操作层</th><th>输入</th><th>输出</th><th>计算类型</th><th>执行频率</th></tr>
+        <tr><td>④</td><td><strong>Tokenizer编码</strong></td><td>用户Prompt</td><td>Token IDs</td><td>CPU哈希查表</td><td><strong>仅此一次</strong></td></tr>
+        <tr><td>⑤</td><td>Embedding + RoPE</td><td>Token IDs</td><td>带位置信息的语义向量</td><td>索引+旋转融合</td><td>一次</td></tr>
+        <tr><td>⑥</td><td>Transformer + KV Cache写入</td><td>输入向量</td><td>隐藏状态 + KV Cache</td><td>密集矩阵乘法</td><td>一次</td></tr>
+    </table>
+
+    <h3>第三阶段：推理Decode阶段（逐字生成）</h3>
+    <table>
+        <tr><th>步骤</th><th>操作层</th><th>输入</th><th>输出</th><th>计算类型</th><th>执行频率</th></tr>
+        <tr><td>⑦</td><td>采样</td><td>Logits</td><td>下一个Token ID</td><td>Softmax+Top-p</td><td><strong>每步1次</strong></td></tr>
+        <tr><td>⑧</td><td>增量前向</td><td>当前ID + 旧KV Cache</td><td>新状态 + 更新KV</td><td>矩阵乘法（1个Token）</td><td><strong>每步1次</strong></td></tr>
+        <tr><td>⑨</td><td><strong>Tokenizer解码</strong></td><td>Token ID</td><td>中文字符串</td><td>哈希查表 (O(1))</td><td>非流式：仅1次；流式：每步1次（配合缓冲区）</td></tr>
+    </table>
+
+    <div class="highlight-box">
+        <strong>最终结论速查表</strong><br>
+        • <strong>Tokenizer编码执行几次？</strong> 训练前全局1次；推理时Prompt阶段仅1次。Decode阶段绝不编码。<br>
+        • <strong>Tokenizer解码执行几次？</strong> 非流式仅最后1次；流式每步1次（需缓冲区防乱码）。<br>
+        • <strong>模型是否依靠解码结果继续推理？</strong> 完全不依靠。模型内部只传整数ID，解码仅供展示。<br>
+        • <strong>微调时能换Tokenizer吗？</strong> 极度危险，除非精通Embedding和lm_head扩展及热启动，否则严格禁止。<br>
+        • <strong>如何评估不同Tokenizer对业务成本的影响？</strong> 使用3.3节压缩比实测代码，对真实语料采样计算。
+    </div>
+
+    <hr>
+    <div class="footer-note">
+        本文完整覆盖从Tokenizer算法本质、生产训练、推理加速、Embedding数学推导到故障排查的全部核心知识，所有代码段可直接纳入CI/CD流水线作为质量门禁。
+    </div>
+
+</div>
+</body>
+</html>
