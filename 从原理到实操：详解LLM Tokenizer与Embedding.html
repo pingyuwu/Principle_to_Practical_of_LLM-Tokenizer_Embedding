@@ -171,27 +171,27 @@
 <div class="container">
 
     <h1>从原理到实操：详解LLM Tokenizer与Embedding</h1>
-
+ 
     <div class="toc">
         <strong>📖 目录</strong>
         <ul style="margin-top: 0.5rem; columns: 2; list-style: none; padding-left: 0;">
             <li>· <a href="#intro">引言：大模型不认识文字</a></li>
-            <li>· <a href="#part1">1. Tokenizer是什么？</a></li>
+            <li>· <a href="#part1">1. Tokenizer是什么？为什么需要？</a></li>
             <li>· <a href="#part2">2. 四大核心算法深度解析</a></li>
             <li>· <a href="#part3">3. 实战工具箱</a></li>
             <li>· <a href="#part4">4. 深入硬核机制：RoPE与KV Cache</a></li>
-            <li>· <a href="#part5">5. 商业模型对比与计费陷阱</a></li>
-            <li>· <a href="#part6">6. 从ID到Vector：Embedding本质</a></li>
+            <li>· <a href="#part5">5. 商业模型对比与“中英文计费陷阱”</a></li>
+            <li>· <a href="#part6">6. 从ID到Vector：Embedding层的数学本质</a></li>
             <li>· <a href="#part7">7. 交叉熵的精准角色</a></li>
-            <li>· <a href="#part8">8. 一致性铁律与故障排查</a></li>
-            <li>· <a href="#conclusion">结语：完整数据流状态机</a></li>
+            <li>· <a href="#part8">8. 一致性铁律与生产级故障排查指南</a></li>
+            <li>· <a href="#conclusion">结语：LLM完整数据流分层级状态机</a></li>
         </ul>
     </div>
 
     <h2 id="intro">引言：大模型不认识文字</h2>
     <p>当你向ChatGPT提问“今天天气怎么样”时，模型内部实际发生的事情，和你想象的可能完全不同。</p>
     <p><strong>大语言模型（LLM）不认识任何文字。</strong> 它只认识数字——准确地说，是浮点数组成的向量。人类书写的“今天天气怎么样”这七个汉字，在进入模型的第一道门前，必须经历一场彻底的“翻译”：先被切成碎片（Tokenization），再被翻译成ID（Token ID），最后被映射成向量（Embedding）。这三步，决定了模型“看到”的世界长什么样，更直接决定了你的<strong>GPU账单</strong>和<strong>推理延迟</strong>。</p>
-    <p>本文将从算法原理、工程实操、数学本质到生产故障排查，为你系统拆解这条“从文字到向量”的必经之路。全文无任何删减，逐层深入。</p>
+    <p>本文将从算法原理、工程实操、数学本质到生产故障排查，为你系统拆解这条“从文字到向量”的必经之路。</p>
 
     <h2 id="part1">第一部分：Tokenizer是什么？为什么需要？</h2>
     <h3>1.1 核心定义</h3>
@@ -204,7 +204,7 @@
 
     <h3>1.2 为什么不能直接处理文字？</h3>
     <ul>
-        <li><strong>字符级（Char-level）</strong>：按单个字符切分（如"H-e-l-l-o"），序列长度急剧增加（Transformer计算复杂度随长度平方增长），且单个字符语义信息太弱，难以构建“词根”等高阶语义。</li>
+        <li><strong>字符级（Char-level）</strong>：按单个字符切分（如“H-e-l-l-o”），序列长度急剧增加（Transformer计算复杂度随长度平方增长），且单个字符语义信息太弱，难以构建“词根”等高阶语义。</li>
         <li><strong>单词级（Word-level）</strong>：按空格切分，词表无限大（英文中“run/running/runner”均算不同词），导致Embedding矩阵内存爆炸，且遇到训练集外的生僻词（OOV）直接报错。</li>
         <li><strong>结论</strong>：必须采用<strong>子词分词（Subword Tokenization）</strong>，在固定词表大小和无限覆盖力之间取得最佳平衡。</li>
     </ul>
@@ -233,7 +233,7 @@
         <tr><td>hugs</td><td>5</td></tr>
     </table>
 
-    <p><strong>第0步（初始化）</strong>：将所有单词拆分为单个字符，并在词尾加上结束符 <code>&lt;/w&gt;</code> 以区分词边界。初始词汇表为 <code>["b", "g", "h", "n", "p", "s", "u"]</code>。</p>
+    <p><strong>第0步（初始化）</strong>：将所有单词拆分为单个字符，并在词尾加上结束符 <code>&lt;/w&gt;</code> 以区分词边界（便于解码时还原）。初始词汇表为 <code>["b", "g", "h", "n", "p", "s", "u"]</code>。</p>
     <p>语料库表示为：</p>
     <ul>
         <li><code>("h" "u" "g" "&lt;/w&gt;", 10)</code></li>
@@ -243,51 +243,125 @@
         <li><code>("h" "u" "g" "s" "&lt;/w&gt;", 5)</code></li>
     </ul>
 
-    <p><strong>第1次合并</strong>：统计相邻符号对频次，<code>("u","g")</code> 出现20次（最高），合并为 <code>"ug"</code>。新词汇表：<code>["b","g","h","n","p","s","u","ug"]</code>。</p>
-    <p><strong>第2次合并</strong>：<code>("u","n")</code> 出现16次（最高），合并为 <code>"un"</code>。词表增加 <code>"un"</code>。</p>
-    <p><strong>第3次合并</strong>：<code>("h","ug")</code> 出现15次，合并为 <code>"hug"</code>。词表增加 <code>"hug"</code>。</p>
-    <p>如此反复执行预设的 <code>num_merges</code>（例如50,001次）后，BPE算法终止。最终，像 <code>"hugging"</code> 这样的未见词会被贪心匹配切分为 <code>["hug", "g", "ing"]</code>（如果"ing"在后续合并中出现）。</p>
+    <p><strong>第1次合并（统计所有相邻符号对）</strong>：</p>
+    <ul>
+        <li><code>("u", "g")</code>：出现在“hug”（10次）、“pug”（5次）、“hugs”（5次）中，总频次 = 10+5+5 = <strong>20次</strong>（最高）。</li>
+        <li><code>("p", "u")</code>：出现在“pug”（5次）、“pun”（12次）中，总频次 = 17次。</li>
+        <li><code>("u", "n")</code>：出现在“pun”（12次）、“bun”（4次）中，总频次 = 16次。</li>
+        <li><code>("h", "u")</code>：出现在“hug”（10次）、“hugs”（5次）中，总频次 = 15次。</li>
+        <li><code>("g", "&lt;/w&gt;")</code>：出现在“hug”（10次）、“pug”（5次）中，总频次 = 15次。</li>
+    </ul>
+    <p>频次最高的是 <code>("u", "g")</code>，将其合并为新Token <code>"ug"</code>。新词汇表：<code>["b", "g", "h", "n", "p", "s", "u", "ug"]</code>。</p>
+    <p>更新语料库：</p>
+    <ul>
+        <li><code>("h" "ug" "&lt;/w&gt;", 10)</code></li>
+        <li><code>("p" "ug" "&lt;/w&gt;", 5)</code></li>
+        <li><code>("p" "u" "n" "&lt;/w&gt;", 12)</code></li>
+        <li><code>("b" "u" "n" "&lt;/w&gt;", 4)</code></li>
+        <li><code>("h" "ug" "s" "&lt;/w&gt;", 5)</code></li>
+    </ul>
+
+    <p><strong>第2次合并</strong>：重新统计现有相邻对频次：</p>
+    <ul>
+        <li><code>("u", "n")</code>：出现在“pun”（12次）、“bun”（4次）中，总频次 = 16次（最高）。</li>
+        <li><code>("h", "ug")</code>：出现在“hug”（10次）、“hugs”（5次）中，总频次 = 15次。</li>
+        <li><code>("p", "ug")</code>：出现在“pug”（5次）中，频次 = 5次。</li>
+        <li><code>("p", "un")</code>：出现在“pun”（12次）中，频次 = 12次。</li>
+    </ul>
+    <p>本次合并 <code>("u", "n")</code> -> <code>"un"</code>。新词汇表：<code>["b", "g", "h", "n", "p", "s", "u", "ug", "un"]</code>。</p>
+    <p>更新语料库：</p>
+    <ul>
+        <li><code>("h" "ug" "&lt;/w&gt;", 10)</code></li>
+        <li><code>("p" "ug" "&lt;/w&gt;", 5)</code></li>
+        <li><code>("p" "un" "&lt;/w&gt;", 12)</code></li>
+        <li><code>("b" "un" "&lt;/w&gt;", 4)</code></li>
+        <li><code>("h" "ug" "s" "&lt;/w&gt;", 5)</code></li>
+    </ul>
+
+    <p><strong>第3次合并</strong>：此时频次最高的是 <code>("h", "ug")</code>（15次），合并 -> <code>"hug"</code>。新词汇表：<code>["b", "g", "h", "n", "p", "s", "u", "ug", "un", "hug"]</code>。</p>
+    <p>更新语料库：</p>
+    <ul>
+        <li><code>("hug" "&lt;/w&gt;", 10)</code></li>
+        <li><code>("p" "ug" "&lt;/w&gt;", 5)</code></li>
+        <li><code>("p" "un" "&lt;/w&gt;", 12)</code></li>
+        <li><code>("b" "un" "&lt;/w&gt;", 4)</code></li>
+        <li><code>("hug" "s" "&lt;/w&gt;", 5)</code></li>
+    </ul>
+
+    <p><strong>迭代终止</strong>：如此反复执行预设的 <code>num_merges</code>（例如执行50,001次）后，BPE算法停止。最终，像 <code>"hugging"</code> 这样的未见词会被贪心匹配切分为 <code>["hug", "g", "ing"]</code>（如果“ing”在后续合并中出现），完美兼顾了语义保留与未知词覆盖。</p>
 
     <h3>2.2 Byte-level BPE——全面消灭“未知Token”</h3>
-    <p>传统BPE直接处理Unicode字符，遇到生僻字或Emoji会标记为 <code>&lt;unk&gt;</code>。Byte-level BPE先将文本转为 <strong>UTF-8字节序列</strong>（0~255），再在这些<strong>字节</strong>上运行BPE。</p>
+    <p>传统BPE直接处理Unicode字符。如果测试时遇到语料中从未出现过的<strong>生僻汉字</strong>或<strong>Emoji</strong>（如 <code>𠮷</code>、<code>😂</code>），传统BPE会因词汇表中无此字符而将其标记为 <code>&lt;unk&gt;</code>。</p>
+    <p><strong>Byte-level BPE的革命性改进</strong>：不直接处理Unicode字符，而是先将文本转换为 <strong>UTF-8字节序列</strong>（每个字节取值范围0~255），然后在这些<strong>字节</strong>上运行BPE算法。</p>
+    <p><strong>实例拆解</strong>：</p>
     <ul>
-        <li><code>'a'</code> → <code>[97]</code>（1字节）</li>
-        <li><code>'中'</code> → <code>[228, 184, 173]</code>（3字节）</li>
-        <li><code>'😂'</code> → <code>[240, 159, 152, 128]</code>（4字节）</li>
+        <li>英文字母 <code>'a'</code> → UTF-8编码为1个字节：<code>[97]</code>。</li>
+        <li>中文字符 <code>'中'</code> → UTF-8编码为3个字节：<code>[228, 184, 173]</code>（十六进制为 <code>E4 B8 AD</code>）。</li>
+        <li>Emoji <code>'😂'</code> → UTF-8编码为4个字节：<code>[240, 159, 152, 128]</code>（十六进制为 <code>F0 9F 98 82</code>）。</li>
     </ul>
-    <p>初始词表固定为256个单字节，后续合并不断扩充。彻底消灭OOV，任何输入均可无损编码。</p>
+    <p>初始词表大小固定为 <strong>256</strong>（覆盖所有单字节）。Byte-level BPE将这256个基础字节作为种子，后续的合并操作（例如将 <code>[228, 184]</code> 合并为中文字节的常见前缀）会不断扩充词表。</p>
+    <p><strong>彻底消灭OOV</strong>：即使模型从未见过Emoji <code>😂</code>，它也能以 <code>[240, 159, 152, 128]</code> 四个字节的形式无损编码，既不会报错，也不会丢失信息。GPT-2/GPT-4/LLaMA均采用此方案。</p>
 
     <h3>2.3 WordPiece——BERT选择的“似然最大化”准则</h3>
-    <p>WordPiece由Google提出，与BPE同属“自底向上”合并，但判决标准不同：</p>
+    <p>WordPiece由Google提出，是BERT家族的标配分词器。它与BPE同属“自底向上”合并算法，但<strong>合并的判决标准截然不同</strong>。</p>
+    <h4>2.3.1 核心差异：从“频次”到“概率增益”</h4>
     <ul>
-        <li><strong>BPE</strong>：选择<strong>频次最高</strong>的相邻对。</li>
-        <li><strong>WordPiece</strong>：选择<strong>能够最大程度提升训练数据似然概率</strong>的相邻对。数学上近似最大化 <span class="math">log(P(z) / (P(x)·P(y)))</span>。</li>
+        <li><strong>BPE</strong>：选择<strong>频次最高</strong>的相邻符号对进行合并。</li>
+        <li><strong>WordPiece</strong>：选择<strong>能够最大程度提升训练数据似然概率（Likelihood）</strong>的相邻符号对进行合并。</li>
     </ul>
-    <p>WordPiece在分词时用 <code>##</code> 前缀标记内部子词，例如 <code>"unbelievable"</code> → <code>["un", "##believ", "##able"]</code>。</p>
+    <h4>2.3.2 数学直觉与公式</h4>
+    <p>假设语料库为 <span class="math">𝒟</span>，当前词表为 <span class="math">𝒱</span>。合并候选对 <span class="math">(x, y)</span> 为新词 <span class="math">z</span> 后，模型对语料的似然提升量近似为：</p>
+    <p style="text-align: center; font-size: 1.1rem;"><span class="math">ΔL ≈ log( P(z) / (P(x)·P(y)) )</span></p>
+    <p>其中 <span class="math">P(·)</span> 是当前模型估计的子词概率。WordPiece选择使 <span class="math">ΔL</span> <strong>最大化</strong>的那一对 <code>(x, y)</code> 执行合并。本质上，它选的是“合并后带来的概率增益最大”的那一对，而不仅仅是“出现次数最多”。</p>
+    <h4>2.3.3 实操中的特殊标记规范</h4>
+    <p>WordPiece在分词时拥有独特的标记法：</p>
+    <ul>
+        <li>单词开头的子词不加特殊前缀（如 <code>"playing"</code> -> <code>["play", "##ing"]</code>）。</li>
+        <li>单词内部或结尾的子词前加 <code>##</code> 前缀，表示该子词必须附着在前一个子词之后。</li>
+    </ul>
+    <p><strong>完整示例</strong>：单词 <code>"unbelievable"</code> 可能被WordPiece切分为 <code>["un", "##believ", "##able"]</code>，其中 <code>"##believ"</code> 和 <code>"##able"</code> 必须紧跟在前面Token后面。</p>
 
     <h3>2.4 Unigram——基于概率模型的“从顶向下”剪枝</h3>
-    <p>Unigram采用“大词表 → 逐步剪枝”策略：</p>
+    <p>Unigram由Mikolov等人提出（论文 <em>Subword Regularization</em>），是<strong>SentencePiece</strong>默认支持的算法之一（如T5、XLNet使用）。</p>
+    <h4>2.4.1 核心逻辑：大词表 → 逐步剪枝</h4>
     <ol>
-        <li>构建超大类词表（含所有可能子词）。</li>
-        <li>使用EM算法估计每个子词的概率。</li>
-        <li>计算删除某子词对整体损失的影响，删除影响最小者。</li>
-        <li>迭代至目标 <code>vocab_size</code>。</li>
+        <li><strong>初始化</strong>：构建一个<strong>极其庞大</strong>的种子词表，包含所有可能的子词组合（甚至包含单个字符）。</li>
+        <li><strong>期望最大化（EM）训练</strong>：基于当前词表，使用EM算法估计每个子词的出现概率 <span class="math">P(subword)</span>。</li>
+        <li><strong>损失评估</strong>：计算<strong>删除</strong>某个子词后，整个语料的损失（负对数似然）会增加多少。</li>
+        <li><strong>剪枝</strong>：删除那些“对损失影响最小”的子词（即概率极低、贡献微弱的稀有词）。</li>
+        <li><strong>迭代</strong>：重复步骤2~4，直到词表缩小到预设的 <code>vocab_size</code>。</li>
     </ol>
-    <p>推理时，使用 <strong>Viterbi动态规划</strong> 寻找全局最优切分路径，支持概率性分词（Subword Regularization），增强鲁棒性。</p>
+    <h4>2.4.2 推理时的最优切分：Viterbi算法</h4>
+    <p>在推理（解码）阶段，Unigram <strong>不是</strong>采用贪心最长匹配。它将输入文本的所有可能切分路径构建成一个<strong>有向无环图（DAG）</strong>，图中每个节点代表字符位置，边代表候选子词及其概率。然后使用 <strong>Viterbi（维特比）动态规划</strong> 算法，寻找全局概率最高的最优切分路径。</p>
+    <p><strong>实操意义</strong>：Unigram是<strong>概率性</strong>的分词器。通过引入概率扰动（Subword Regularization），可以对同一输入产生不同的分词结果，极大增强了机器翻译等任务的鲁棒性。</p>
 
     <h3>2.5 SentencePiece——工业界的“万能工具包”</h3>
-    <p><strong>SentencePiece不是算法，而是工程框架</strong>，封装了BPE和Unigram，解决传统Tokenizer的痛点：</p>
-    <ul>
-        <li><strong>无需预分词</strong>：将空格映射为特殊字符 <code>▁</code>，完美适配中文/日文。</li>
-        <li><strong>完全可逆</strong>：解码时还原空格，不丢失信息。</li>
-    </ul>
-    <p><strong>核心配置参数</strong>：<code>--model_type</code>（bpe/unigram）、<code>--vocab_size</code>、<code>--character_coverage</code>（推荐0.9995~1.0）、<code>--byte_fallback</code>（必须设为true）、<code>--split_by_whitespace</code>（处理中文时false）。LLaMA系列即采用此工具包，<code>vocab_size=128,256</code>。</p>
+    <p><strong>严格来说，SentencePiece不是一种算法，而是一个工程框架（开源库）</strong>。它封装了BPE和Unigram两种算法的实现，并解决了传统Tokenizer的诸多致命痛点。</p>
+    <h4>2.5.1 两大革命性创新</h4>
+    <ol>
+        <li><strong>无需预分词（No Pre-tokenization Required）</strong>：传统BPE/WordPiece依赖空格或标点进行预切分（如英文按空格分词）。但中文、日文、泰文等语言没有空格，预切分极其困难且容易出错。SentencePiece将输入视为<strong>原始字节流</strong>，把所有字符（包括空格）平等对待。空格被显式映射为特殊符号 <code>▁</code>（U+2581，即下划线变体）。</li>
+        <li><strong>完全可逆（Lossless Reversibility）</strong>：由于空格被显式编码为 <code>▁</code>，无论内部如何切分，解码时只需将 <code>▁</code> 还原为空格，就能完美恢复原始文本，绝不会丢失空格信息。</li>
+    </ol>
+    <h4>2.5.2 实操中的核心配置参数详解</h4>
+    <p>在生产环境中使用SentencePiece训练词表时，以下参数直接决定模型质量：</p>
+    <table>
+        <tr><th>参数</th><th>说明</th><th>推荐值/生产建议</th></tr>
+        <tr><td><code>--model_type</code></td><td>选择底层算法</td><td><code>bpe</code>（LLaMA系列）或 <code>unigram</code>（T5/XLNet）</td></tr>
+        <tr><td><code>--vocab_size</code></td><td>最终词表大小</td><td>纯英文32K~50K；多语言（含中文）需 ≥ 100K</td></tr>
+        <tr><td><code>--character_coverage</code></td><td>字符覆盖率（处理罕见字符）</td><td>设为 <code>0.9995</code> ~ <code>1.0</code>，确保生僻汉字不被强制回退</td></tr>
+        <tr><td><code>--input_sentence_size</code></td><td>从语料中抽样训练的行数</td><td>若语料极大（TB级），抽样100万~500万行即可</td></tr>
+        <tr><td><code>--byte_fallback</code></td><td>是否回退到UTF-8字节</td><td><strong>必须设为 <code>true</code></strong>（等价于Byte-level BPE，彻底消灭OOV）</td></tr>
+        <tr><td><code>--split_by_whitespace</code></td><td>是否按空格预切分</td><td>处理中文时建议 <code>false</code>，让模型自主切分</td></tr>
+    </table>
+    <p><strong>实际生产案例</strong>：LLaMA全系列采用SentencePiece工具包，底层使用<strong>BPE算法</strong>，<code>vocab_size=128,256</code>，<code>byte_fallback=true</code>，<code>character_coverage=1.0</code>。</p>
 
     <h2 id="part3">第三部分：实战工具箱（可直接复制执行的代码）</h2>
 
     <h3>3.1 训练一个属于你自己的SentencePiece词表</h3>
-    <pre><code>pip install sentencepiece
+    <pre><code># 安装依赖
+pip install sentencepiece
 
+# 假设已有纯文本语料 corpus.txt（每行一句）
 spm_train \
   --input=corpus.txt \
   --model_prefix=my_llm_tokenizer \
@@ -301,11 +375,16 @@ spm_train \
     <h3>3.2 在生产环境中加载并验证Tokenizer</h3>
     <pre><code>from transformers import AutoTokenizer
 
+# 加载官方预训练模型的分词器（必须与权重严格对应）
 tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
+
+# 编码与解码
 text = "今天天气真好，我们一起去公园吧！"
 ids = tokenizer.encode(text)
 print(f"Token IDs: {ids}")
 print(f"解码还原: {tokenizer.decode(ids)}")
+
+# 计算单条压缩比（衡量业务成本的核心指标）
 compression_ratio = len(text) / len(ids)
 print(f"压缩比: {compression_ratio:.2f} 字符/Token")</code></pre>
 
@@ -315,143 +394,214 @@ from transformers import AutoTokenizer
 from tqdm import tqdm
 
 def measure_compression_ratio(tokenizer, texts, sample_size=1000):
+    """
+    批量计算压缩比，用于评估不同Tokenizer对业务语料的成本影响
+    """
     sampled = texts[:min(sample_size, len(texts))]
     ratios = []
+
     for text in tqdm(sampled, desc="测量压缩比"):
         ids = tokenizer.encode(text)
         ratios.append(len(text) / len(ids))
+
     return {
         "mean": np.mean(ratios),
         "median": np.median(ratios),
         "p25": np.percentile(ratios, 25),
         "p75": np.percentile(ratios, 75),
+        "min": np.min(ratios),
+        "max": np.max(ratios)
     }
-# 使用示例：stats = measure_compression_ratio(tokenizer, sample_texts)</code></pre>
+
+# 使用示例
+# sample_texts = ["你的业务语料列表"]  # 从日志或数据集中抽取
+# stats = measure_compression_ratio(tokenizer, sample_texts)
+# print(f"平均压缩比: {stats['mean']:.2f} 字符/Token")</code></pre>
 
     <h3>3.4 原子性断言（防止词表不匹配导致线上崩溃）</h3>
     <pre><code>def check_tokenizer_alignment(model_path, tokenizer):
+    """
+    在生产环境加载模型后立即执行此检查，杜绝 vocab_size 不匹配导致的索引越界
+    """
     from transformers import AutoConfig
+
     config = AutoConfig.from_pretrained(model_path)
-    assert config.vocab_size == len(tokenizer), \
-        f"❌ 模型词表 {config.vocab_size} 与 Tokenizer 词表 {len(tokenizer)} 不匹配！"
-    test_text = "这是一段测试文本。"
+    vocab_size_model = config.vocab_size
+    vocab_size_tokenizer = len(tokenizer)
+
+    assert vocab_size_model == vocab_size_tokenizer, \
+        f"❌ 严重错误！模型词表 {vocab_size_model} 与 Tokenizer 词表 {vocab_size_tokenizer} 不匹配！"
+
+    # 额外检查：用随机文本过一遍，确保无运行时错误
+    test_text = "这是一段测试文本，用于验证Tokenizer的稳定性。"
     try:
         ids = tokenizer.encode(test_text)
-        tokenizer.decode(ids)
+        decoded = tokenizer.decode(ids)
+        assert decoded == test_text or len(decoded) > 0
     except Exception as e:
-        raise RuntimeError(f"❌ Tokenizer运行时验证失败: {e}")
-    print("✅ 所有对齐验证通过。")</code></pre>
+        raise RuntimeError(f"❌ Tokenizer 运行时验证失败: {e}")
+
+    print("✅ 所有对齐验证通过，可以安全启动推理服务。")</code></pre>
 
     <h2 id="part4">第四部分：深入硬核机制——RoPE与KV Cache</h2>
 
     <h3>4.1 RoPE（旋转位置编码）的数学直觉</h3>
-    <p>RoPE将位置信息通过<strong>旋转矩阵</strong>嵌入到Query和Key中。对于位置 <span class="math">m</span> 的 <span class="math">q_m</span> 和位置 <span class="math">n</span> 的 <span class="math">k_n</span>，内积结果仅依赖于相对位置 <span class="math">(m-n)</span>，外推能力强。</p>
-    <p>二维旋转示意：每个维度对 (2d, 2d+1) 被旋转角度 <span class="math">m·θ</span>，使得 <span class="math">q_m · k_n = f(q,k, m-n)</span>。</p>
+    <p>为什么简单的绝对位置相加（如原始Transformer）不够好？因为模型需要知道 <strong>“你”离“我”有多远</strong>（相对距离）。<strong>RoPE</strong>的核心思想是将位置信息通过<strong>旋转矩阵</strong>嵌入到Query和Key向量中。</p>
+    <p><strong>二维旋转示意</strong>：</p>
+    <p>在RoPE中，每个维度对（2d, 2d+1）被视为一个二维平面。对于位置 <span class="math">m</span>，该平面上的向量会被旋转角度 <span class="math">m·θ<sub>d</sub></span>：</p>
+    <pre><code>旋转前：  q_vec = (x₀, x₁)       k_vec = (y₀, y₁)
+           │                       │
+           ▼                       ▼
+旋转后：  q'_vec = Rot(m·θ)·q    k'_vec = Rot(n·θ)·k
+
+其中 Rot(θ) = [[cos θ, -sin θ],
+               [sin θ,  cos θ]]</code></pre>
+    <p>最终，内积结果为：</p>
+    <p style="text-align: center; font-size: 1.1rem;"><span class="math">q<sub>m</sub> · k<sub>n</sub> = f(q, k, m−n)</span></p>
+    <p>即内积结果<strong>天然仅依赖于相对位置</strong> <span class="math">(m−n)</span>，而与绝对值无关。这使得模型不仅能捕捉绝对顺序，更能拥有极强的外推能力（推理比训练序列更长时，性能衰减更慢）。</p>
 
     <h3>4.2 KV Cache——推理加速的“空间换时间”基石</h3>
+    <p>在自回归生成（Decode阶段）中，每生成一个新Token，前面所有Token的Key（键）和Value（值）矩阵<strong>在本质上不会改变</strong>。</p>
     <ul>
-        <li><strong>无Cache</strong>：每生成1个字需重算整个序列注意力，复杂度 <span class="math">O(n²)</span>。</li>
-        <li><strong>有KV Cache</strong>：缓存历史K/V，新Token只算自己的Q并与缓存K/V做注意力，复杂度 <span class="math">O(n)</span>。</li>
-        <li><strong>代价</strong>：显存占用随序列长度线性增长，长上下文推理显存爆炸的主因。</li>
+        <li><strong>无Cache（朴素实现）</strong>：每生成1个字，需要重新计算整个历史序列的注意力 → 时间复杂度 <span class="math">O(n²)</span>，当 <span class="math">n</span> 变大时，生成速度呈平方级下降。</li>
+        <li><strong>有KV Cache（工业实现）</strong>：将之前已计算的K/V全部缓存在显存中。新Token只计算自己（位置 <span class="math">n+1</span>）的Query，并与缓存中的所有K/V做注意力计算 → 时间复杂度降至 <span class="math">O(n)</span>。</li>
+        <li><strong>代价</strong>：显存占用随序列长度线性增长，这也是长上下文（如100K tokens）推理时显存爆炸的主要原因。</li>
     </ul>
 
     <h2 id="part5">第五部分：商业模型对比与“中英文计费陷阱”</h2>
     <table>
         <tr><th>模型</th><th>算法实现</th><th>词表大小</th><th>英文压缩比</th><th>中文压缩比</th><th>业务成本风险提示</th></tr>
-        <tr><td>GPT-4 (cl100k)</td><td>Byte-level BPE</td><td>~100K</td><td>~4.0</td><td>~1.8</td><td><strong>中文Prompt费用是英文的2.2倍</strong></td></tr>
-        <tr><td>LLaMA 3</td><td>BPE (SentencePiece)</td><td>128,256</td><td>~4.2</td><td>~2.0</td><td>对中文有优化但仍偏碎</td></tr>
-        <tr><td>Qwen2.5</td><td>BPE</td><td>~151K</td><td>~4.5</td><td>~2.5</td><td>专为中文优化，成本更低</td></tr>
+        <tr><td><strong>GPT-4 (cl100k)</strong></td><td>Byte-level BPE</td><td>~100K</td><td>~4.0 字符/Token</td><td>~1.8 汉字/Token</td><td><strong>中文Prompt费用是英文的2.2倍</strong></td></tr>
+        <tr><td><strong>LLaMA 3</strong></td><td>BPE (SentencePiece)</td><td>128,256</td><td>~4.2 字符/Token</td><td>~2.0 汉字/Token</td><td>对中文有优化，但颗粒仍偏碎</td></tr>
+        <tr><td><strong>Qwen2.5</strong></td><td>BPE</td><td>~151,643</td><td>~4.5 字符/Token</td><td>~2.5 汉字/Token</td><td>专为中文语料优化，合并更充分，成本更低</td></tr>
     </table>
     <div class="highlight-box">
-        <strong>关键洞察：</strong>由于中文UTF-8占3个字节，BPE对中文的压缩能力天然弱于英文。<strong>同样的100个字符，中文产生的Token数几乎是英文的两倍。</strong>选型时必须针对自身业务语种进行压缩比实测（参见3.3节代码）。
+        <strong>关键洞察：</strong>由于中文UTF-8占3个字节，且词汇组合灵活，BPE对中文的压缩能力天然弱于英文。<strong>同样的100个字符，中文产生的Token数几乎是英文的两倍。</strong>选型时必须针对自身业务语种进行压缩比实测（参见3.3节代码），否则线上推理成本会严重超出预算。
     </div>
 
     <h2 id="part6">第六部分：从ID到Vector——Embedding层的数学本质</h2>
+
     <h3>6.1 查表即矩阵乘法</h3>
-    <p>嵌入矩阵 <span class="math">E ∈ R<sup>V×d</sup></span>，输入One-hot向量 <span class="math">o<sub>i</sub></span>（仅第i位为1），则 <span class="math">v<sub>i</sub> = o<sub>i</sub> × E</span>，等价于直接索引第i行，无浮点计算。</p>
+    <p>嵌入矩阵 <span class="math">E ∈ ℝ<sup>V×d</sup></span>。输入One-hot独热编码 <span class="math">o<sub>i</sub> ∈ ℝ<sup>V</sup></span>（仅第 <span class="math">i</span> 位为1，其余为0）：</p>
+    <p style="text-align: center; font-size: 1.1rem;"><span class="math">v<sub>i</sub> = o<sub>i</sub> × E</span></p>
+    <p>由于One-hot的极度稀疏性，此操作等价于<strong>直接索引第 <span class="math">i</span> 行</strong>，完全不涉及浮点计算。</p>
 
     <h3>6.2 梯度如何更新Embedding？</h3>
-    <p>损失 <span class="math">L</span> 对 <span class="math">E</span> 的梯度： <span class="math">∂L/∂E = o<sub>i</sub><sup>T</sup> · (∂L/∂v<sub>i</sub>)</span>。由于 <span class="math">o<sub>i</sub></span> 只有第i位为1，梯度矩阵中<strong>只有第i行非零</strong>，其余全为0。</p>
-    <p>更新： <span class="math">E<sub>new</sub> = E<sub>old</sub> - η·∂L/∂E</span>。每次反向传播<strong>只更新当前Token对应的那一行</strong>。相似上下文导致不同Token（如“苹果”“香蕉”）的梯度方向趋同，最终在高维空间中靠近。</p>
+    <p>设最终损失为 <span class="math">L</span>，从网络上游传回给词向量 <span class="math">v<sub>i</sub></span> 的梯度为 <span class="math">∂L/∂v<sub>i</sub></span>。根据链式法则：</p>
+    <p style="text-align: center; font-size: 1.1rem;"><span class="math">∂L/∂E = o<sub>i</sub><sup>T</sup> · (∂L/∂v<sub>i</sub>)</span></p>
+    <p>因为 <span class="math">o<sub>i</sub></span> 只有第 <span class="math">i</span> 位是1，故梯度矩阵中<strong>只有第 <span class="math">i</span> 行非零</strong>，其余行全为0。</p>
+    <p>梯度下降更新：</p>
+    <p style="text-align: center; font-size: 1.1rem;"><span class="math">E<sub>new</sub> = E<sub>old</sub> − η · ∂L/∂E</span></p>
+    <p><strong>物理意义</strong>：每一次反向传播，<strong>只更新当前输入Token ID所对应的那一行向量</strong>。为什么“苹果”和“香蕉”最终会靠近？因为它们常出现在相似上下文中（如“我喜欢吃___”），来自相似上下文的上游梯度方向趋同，在多次迭代后将其坐标推向高维空间中的同一区域。</p>
 
     <h2 id="part7">第七部分：交叉熵的精准角色（前向与反向的桥梁）</h2>
-    <p>预测下一个词 <span class="math">ID<sub>i+1</sub></span> 时：</p>
+    <p>在预测下一个词 <span class="math">ID<sub>i+1</sub></span> 时：</p>
     <ul>
-        <li><span class="math">ID<sub>i</sub></span> 决定取 <span class="math">v<sub>i</sub></span>（输入特征索引）。</li>
-        <li><span class="math">v<sub>i</sub></span> 经Transformer变为 <span class="math">h<sub>i</sub></span>。</li>
-        <li>输出映射： <span class="math">z<sub>i</sub> = h<sub>i</sub> · W</span>（Logits）。</li>
-        <li>交叉熵： <span class="math">L<sub>i</sub> = -log( exp(z<sub>i</sub>[ID<sub>i+1</sub>]) / Σ<sub>j</sub> exp(z<sub>i</sub>[j]) )</span>。</li>
+        <li><span class="math">ID<sub>i</sub></span>：决定取Embedding矩阵的哪一行 <span class="math">v<sub>i</sub></span>。</li>
+        <li><span class="math">v<sub>i</sub></span>：经Transformer多层变换成为隐藏状态 <span class="math">h<sub>i</sub></span>。</li>
+        <li>输出映射：<span class="math">z<sub>i</sub> = h<sub>i</sub> × W</span>（得到Logits，长度为 <span class="math">V</span>）。</li>
+        <li>交叉熵损失：</li>
     </ul>
-    <p><strong>关键：</strong> <span class="math">ID<sub>i+1</sub></span> 仅作为标签索引从Logits中取分计算Loss；<span class="math">v<sub>i+1</sub></span> 绝不参与本次预测（因果掩码）。</p>
+    <p style="text-align: center; font-size: 1.1rem;"><span class="math">L<sub>i</sub> = −log( exp(z<sub>i</sub>[ID<sub>i+1</sub>]) / Σ<sub>j=1</sub><sup>V</sup> exp(z<sub>i</sub>[j]) )</span></p>
+    <p><strong>关键关系（极易混淆）</strong>：</p>
+    <ul>
+        <li><span class="math">ID<sub>i</sub></span> 是<strong>输入特征索引</strong>，<span class="math">v<sub>i</sub></span> 是其语义载体。</li>
+        <li><span class="math">ID<sub>i+1</sub></span> 是<strong>标签索引</strong>，仅用于从Logits中提取对应分数计算Loss。</li>
+        <li><span class="math">v<sub>i+1</sub></span> <strong>绝不参与本次预测</strong>（因果注意力掩码保证未来信息不可见）。</li>
+    </ul>
 
     <h2 id="part8">第八部分：一致性铁律与生产级故障排查指南</h2>
 
     <h3>8.1 三大不可违背的铁律</h3>
     <ol>
-        <li><strong>词表与权重强绑定</strong>：训练与推理必须使用同一Tokenizer文件。</li>
-        <li><strong>推理时Embedding冻结</strong>：<code>requires_grad=False</code>，仅查表。</li>
-        <li><strong>算法逻辑必须一致</strong>：训练用BPE则推理也必须用BPE的合并规则。</li>
+        <li><strong>词表（Vocab）与权重（Weight）强绑定</strong>：训练时用A模型的Tokenizer，推理时绝不能用B模型的，否则ID映射错乱导致灾难性输出。</li>
+        <li><strong>推理时Embedding冻结</strong>：模型处于 <code>eval()</code> 模式，<code>requires_grad=False</code>，仅查表，不更新。</li>
+        <li><strong>算法逻辑必须严格一致</strong>：训练时用BPE，推理时也必须用完全相同的合并规则（<code>merges.txt</code>）。</li>
     </ol>
 
     <h3>8.2 常见生产报错与急救指南</h3>
     <table>
-        <tr><th>报错现象</th><th>根本原因</th><th>解决方案</th></tr>
-        <tr><td><code>IndexError: index out of range</code></td><td>Tokenizer词表大小 > 模型配置的 <code>vocab_size</code></td><td>加载后立即执行对齐断言（见3.4节），更换配套Tokenizer文件。</td></tr>
-        <tr><td>生成文字全是 <code>�</code> 乱码</td><td>流式输出时每Token单独解码，多字节字符被截断</td><td>维护解码缓冲区，每次传入完整累积ID列表解码，截取增量返回。</td></tr>
-        <tr><td>微调后Loss不下降或生成重复</td><td>扩展词表时新Embedding未热启动或 <code>lm_head</code> 未同步</td><td>新词向量由相似旧词取平均初始化；<code>lm_head</code> 同步扩展并加噪声。</td></tr>
-        <tr><td>中文压缩比极低（<1.5）</td><td><code>byte_fallback</code> 未开启或 <code>character_coverage</code> 过低</td><td>重新训练Tokenizer，设置 <code>--byte_fallback=true</code> 和 <code>--character_coverage=1.0</code>。</td></tr>
-        <tr><td>Tokenizer版本漂移</td><td>模型仓库更新了 <code>tokenizer_config.json</code> 或 <code>merges.txt</code></td><td>固定<code>transformers</code>版本并锁定文件哈希；加载后对基准文本编码验证ID是否一致。</td></tr>
+        <tr><th>报错现象</th><th>根本原因</th><th>详细排查与解决方案</th></tr>
+        <tr>
+            <td><code>IndexError: index out of range</code></td>
+            <td>加载的Tokenizer词表大小 > 模型配置中的 <code>vocab_size</code>。例如用GPT-4的100K词表去加载LLaMA的32K模型。</td>
+            <td>在加载模型后<strong>立即执行断言</strong>（见3.4节代码）。若不一致，必须更换为模型配套的Tokenizer文件。</td>
+        </tr>
+        <tr>
+            <td>生成文字全是 <code>�</code> 乱码</td>
+            <td>流式输出时，每生成一个Token就立即解码，遇到多字节UTF-8字符（如Emoji、生僻汉字）被截断。</td>
+            <td><strong>工程解法</strong>：维护一个<strong>解码缓冲区</strong>。每次传入<strong>完整累积ID列表</strong>进行解码，然后截取新增的增量字符串返回，确保上下文完整。</td>
+        </tr>
+        <tr>
+            <td>微调后Loss不下降或生成重复死循环</td>
+            <td>扩展词表（新增自定义Token）后，新Embedding向量未做热启动初始化（直接全零或随机），且 <code>lm_head</code> 输出层未同步扩展。</td>
+            <td>新词向量应由原词表中语义相近的Token向量<strong>取平均</strong>初始化；<code>lm_head</code> 权重也需同尺寸扩展并做适当的噪声初始化。</td>
+        </tr>
+        <tr>
+            <td>中文压缩比极低（<1.5字符/Token）</td>
+            <td>训练Tokenizer时未开启 <code>byte_fallback</code> 或 <code>character_coverage</code> 设得太低（如0.99），导致罕见汉字全部退化为单字节，序列膨胀。</td>
+            <td>使用SentencePiece重新训练，强制设置 <code>--byte_fallback=true</code> 和 <code>--character_coverage=1.0</code>，让高频汉字组合被充分合并。</td>
+        </tr>
+        <tr>
+            <td><strong>Tokenizer版本漂移</strong></td>
+            <td>HuggingFace模型仓库更新了 <code>tokenizer_config.json</code> 或 <code>merges.txt</code>，但权重文件未变（或相反），导致同一段文本在不同时间编码出不同ID。</td>
+            <td><strong>预防方案</strong>：在部署时固定 <code>transformers</code> 版本并锁定Tokenizer文件哈希值；在加载后立即对一段<strong>固定基准文本</strong>编码并验证其ID序列是否与预期一致，不一致则立即告警。</td>
+        </tr>
     </table>
 
     <h3>8.3 Tokenizer版本漂移的完整排查示例</h3>
-    <pre><code>BASELINE_TEXT = "这是一个用于版本漂移检测的固定文本。"
+    <pre><code># 基准测试（在模型上线时执行）
+BASELINE_TEXT = "这是一个用于版本漂移检测的固定文本。"
 EXPECTED_IDS = [101, 234, 567, ...]  # 从上一个稳定版本记录
 
 def detect_tokenizer_drift(tokenizer):
     current_ids = tokenizer.encode(BASELINE_TEXT)
     if current_ids != EXPECTED_IDS:
-        raise RuntimeError(f"❌ 漂移检测失败！预期前10ID: {EXPECTED_IDS[:10]}, 实际: {current_ids[:10]}")
-    print("✅ 版本一致性验证通过")</code></pre>
+        raise RuntimeError(
+            f"❌ Tokenizer版本漂移检测失败！\n"
+            f"预期前10个ID: {EXPECTED_IDS[:10]}\n"
+            f"实际前10个ID: {current_ids[:10]}"
+        )
+    print("✅ Tokenizer版本一致性验证通过")</code></pre>
 
     <h2 id="conclusion">结语：LLM完整数据流分层级状态机</h2>
 
-    <h3>第一阶段：预处理阶段（离线，仅训练）</h3>
+    <p>摒弃混乱的文本流，以下三张表格精准展现数据在训练/推理各阶段的形态变化与触发时机，无任何隐含假设。</p>
+
+    <h3>第一阶段：预处理阶段（离线，仅训练时执行）</h3>
     <table>
         <tr><th>步骤</th><th>操作层</th><th>输入</th><th>输出</th><th>计算类型</th><th>执行频率</th></tr>
-        <tr><td>①</td><td>原始语料加载</td><td>磁盘文件</td><td>UTF-8字节流</td><td>I/O</td><td>一次性</td></tr>
-        <tr><td>②</td><td><strong>Tokenizer编码</strong></td><td>字节流</td><td><strong>Token IDs</strong></td><td>CPU哈希查表</td><td><strong>全量执行一次，落盘</strong></td></tr>
-        <tr><td>③</td><td>持久化存储</td><td>Token IDs</td><td><code>.bin</code>/Arrow</td><td>序列化</td><td>保存后只读</td></tr>
+        <tr><td>①</td><td>原始语料加载</td><td>磁盘文件 (JSON/TXT)</td><td>UTF-8字节流</td><td>内存I/O</td><td>一次性</td></tr>
+        <tr><td>②</td><td><strong>Tokenizer编码</strong></td><td>字节流</td><td><strong>Token IDs数组</strong></td><td><strong>CPU字符串匹配 + 哈希查表</strong></td><td><strong>全量语料执行一次，持久化落盘</strong></td></tr>
+        <tr><td>③</td><td>持久化存储</td><td>Token IDs</td><td><code>.bin</code> / Arrow二进制文件</td><td>序列化写入</td><td>保存后训练只读</td></tr>
     </table>
 
-    <h3>第二阶段：推理Prefill阶段（处理Prompt）</h3>
+    <h3>第二阶段：推理Prefill阶段（首次前向，处理用户Prompt）</h3>
     <table>
         <tr><th>步骤</th><th>操作层</th><th>输入</th><th>输出</th><th>计算类型</th><th>执行频率</th></tr>
-        <tr><td>④</td><td><strong>Tokenizer编码</strong></td><td>用户Prompt</td><td>Token IDs</td><td>CPU哈希查表</td><td><strong>仅此一次</strong></td></tr>
-        <tr><td>⑤</td><td>Embedding + RoPE</td><td>Token IDs</td><td>带位置信息的语义向量</td><td>索引+旋转融合</td><td>一次</td></tr>
-        <tr><td>⑥</td><td>Transformer + KV Cache写入</td><td>输入向量</td><td>隐藏状态 + KV Cache</td><td>密集矩阵乘法</td><td>一次</td></tr>
+        <tr><td>④</td><td><strong>Tokenizer编码</strong></td><td>用户Prompt字符串</td><td>Token IDs</td><td><strong>CPU哈希查表</strong></td><td><strong>仅此一次（绝不重复）</strong></td></tr>
+        <tr><td>⑤</td><td>Embedding查表 + RoPE</td><td>Token IDs</td><td>带位置信息的语义向量</td><td>索引操作 + 旋转融合</td><td>一次</td></tr>
+        <tr><td>⑥</td><td>Transformer前向 + KV Cache写入</td><td>输入向量</td><td>首轮隐藏状态 + 完整KV Cache</td><td>密集矩阵乘法 (GPU)</td><td>一次</td></tr>
     </table>
 
-    <h3>第三阶段：推理Decode阶段（逐字生成）</h3>
+    <h3>第三阶段：推理Decode阶段（自回归循环，逐字生成回答）</h3>
     <table>
         <tr><th>步骤</th><th>操作层</th><th>输入</th><th>输出</th><th>计算类型</th><th>执行频率</th></tr>
-        <tr><td>⑦</td><td>采样</td><td>Logits</td><td>下一个Token ID</td><td>Softmax+Top-p</td><td><strong>每步1次</strong></td></tr>
-        <tr><td>⑧</td><td>增量前向</td><td>当前ID + 旧KV Cache</td><td>新状态 + 更新KV</td><td>矩阵乘法（1个Token）</td><td><strong>每步1次</strong></td></tr>
-        <tr><td>⑨</td><td><strong>Tokenizer解码</strong></td><td>Token ID</td><td>中文字符串</td><td>哈希查表 (O(1))</td><td>非流式：仅1次；流式：每步1次（配合缓冲区）</td></tr>
+        <tr><td>⑦</td><td>采样 (Sampling)</td><td>上一步Logits</td><td>下一个Token ID</td><td>Softmax + Top-p/Top-k</td><td><strong>每生成1个字执行1次</strong></td></tr>
+        <tr><td>⑧</td><td>增量前向</td><td>当前Token ID + 旧KV Cache</td><td>新隐藏状态 + 更新KV Cache</td><td>矩阵乘法（仅算1个新Token）</td><td><strong>每生成1个字执行1次</strong></td></tr>
+        <tr><td>⑨</td><td><strong>Tokenizer解码</strong></td><td>Token ID</td><td>中文字符串</td><td><strong>哈希查表 (O(1))</strong></td><td><strong>非流式：仅最后1次；流式：每步1次（配合缓冲区）</strong></td></tr>
     </table>
 
     <div class="highlight-box">
-        <strong>最终结论速查表</strong><br>
-        • <strong>Tokenizer编码执行几次？</strong> 训练前全局1次；推理时Prompt阶段仅1次。Decode阶段绝不编码。<br>
-        • <strong>Tokenizer解码执行几次？</strong> 非流式仅最后1次；流式每步1次（需缓冲区防乱码）。<br>
-        • <strong>模型是否依靠解码结果继续推理？</strong> 完全不依靠。模型内部只传整数ID，解码仅供展示。<br>
-        • <strong>微调时能换Tokenizer吗？</strong> 极度危险，除非精通Embedding和lm_head扩展及热启动，否则严格禁止。<br>
-        • <strong>如何评估不同Tokenizer对业务成本的影响？</strong> 使用3.3节压缩比实测代码，对真实语料采样计算。
+        <strong>最终结论速查表（业务与研发必读）</strong><br><br>
+        • <strong>Tokenizer编码执行几次？</strong> <strong>训练前全局执行1次</strong>（全量数据落盘）；<strong>推理时对Prompt执行1次</strong>（仅Prefill阶段）。Decode阶段<strong>绝不</strong>重复编码。<br>
+        • <strong>Tokenizer解码执行几次？</strong> 若为非流式（一次性显示全文），仅<strong>最后执行1次</strong>；若为流式（打字机效果），每生成一个Token执行1次，但必须配合<strong>缓冲区</strong>防止多字节字符（如Emoji）乱码。<br>
+        • <strong>模型是否依靠解码结果继续推理？</strong> <strong>完全不依靠</strong>。模型内部自回归循环只传递整数ID（步骤⑦→⑧），解码（步骤⑨）纯粹为了展示给人类用户，<strong>与模型逻辑无关</strong>。<br>
+        • <strong>微调时能换Tokenizer吗？</strong> <strong>极度危险，严格禁止</strong>。除非你精通如何扩展Embedding和 <code>lm_head</code> 并做充分的热启动对齐，否则强行替换将导致模型彻底失效。<br>
+        • <strong>如何评估不同Tokenizer对业务成本的影响？</strong> 使用3.3节的压缩比批量实测代码，对真实业务语料采样1000条以上，计算平均压缩比和分位值，作为选型决策的量化依据。
     </div>
 
     <hr>
-    <div class="footer-note">
-        本文完整覆盖从Tokenizer算法本质、生产训练、推理加速、Embedding数学推导到故障排查的全部核心知识，所有代码段可直接纳入CI/CD流水线作为质量门禁。
-    </div>
 
 </div>
 </body>
