@@ -446,20 +446,96 @@ def measure_compression_ratio(tokenizer, texts, sample_size=1000):
     <h2 id="part4">第四部分：深入硬核机制——RoPE与KV Cache</h2>
 
     <h3>4.1 RoPE（旋转位置编码）的数学直觉</h3>
-    <p>为什么简单的绝对位置相加（如原始Transformer）不够好？因为模型需要知道 <strong>“你”离“我”有多远</strong>（相对距离）。<strong>RoPE</strong>的核心思想是将位置信息通过<strong>旋转矩阵</strong>嵌入到Query和Key向量中。</p>
-    <p><strong>二维旋转示意</strong>：</p>
-    <p>在RoPE中，每个维度对（2d, 2d+1）被视为一个二维平面。对于位置 <span class="math">m</span>，该平面上的向量会被旋转角度 <span class="math">m·θ<sub>d</sub></span>：</p>
-    <pre><code>旋转前：  q_vec = (x₀, x₁)       k_vec = (y₀, y₁)
-           │                       │
-           ▼                       ▼
-旋转后：  q'_vec = Rot(m·θ)·q    k'_vec = Rot(n·θ)·k
 
-其中 Rot(θ) = [[cos θ, -sin θ],
-               [sin θ,  cos θ]]</code></pre>
-    <p>最终，内积结果为：</p>
-    <p style="text-align: center; font-size: 1.1rem;"><span class="math">q<sub>m</sub> · k<sub>n</sub> = f(q, k, m−n)</span></p>
-    <p>即内积结果<strong>天然仅依赖于相对位置</strong> <span class="math">(m−n)</span>，而与绝对值无关。这使得模型不仅能捕捉绝对顺序，更能拥有极强的外推能力（推理比训练序列更长时，性能衰减更慢）。</p>
+    <p>为什么简单的绝对位置相加（如原始 Transformer）不够好？因为模型需要知道 <strong>“你”离“我”有多远</strong>（相对距离），而不仅仅是“你在第 3 位，我在第 5 位”。<strong>RoPE</strong> 的核心思想是将位置信息通过<strong>旋转矩阵</strong>嵌入到 Query 和 Key 向量中，使得内积结果天然依赖于相对位置。</p>
 
+    <h4>4.1.1 为什么必须引入 <span class="math">θ<sub>d</sub></span>（多维度频率）？</h4>
+
+    <p>在 RoPE 中，<strong>不同维度的特征对应该有不同的旋转速度</strong>。如果所有维度旋转速度都一样，模型就无法区分“近距离依赖”（如形容词修饰名词）和“远距离依赖”（如段落首尾呼应）。</p>
+    <p>因此，对于词嵌入向量的第 <span class="math">d</span> 个维度对（<span class="math">d = 0, 1, …, D/2−1</span>），我们定义一个基准频率：</p>
+    <div class="math-block">
+        <span class="math">θ<sub>d</sub> = 10000<sup>−2d/D</sup></span>
+    </div>
+    <p>其中 <span class="math">D</span> 是隐藏层维度。这意味着：</p>
+    <ul>
+        <li>当 <span class="math">d</span> 较小时，<span class="math">θ<sub>d</sub></span> 较大（旋转速度快，适合捕捉局部位置关系）；</li>
+        <li>当 <span class="math">d</span> 较大时，<span class="math">θ<sub>d</sub></span> 较小（旋转速度慢，适合捕捉全局位置关系）。</li>
+    </ul>
+
+    <h4>4.1.2 带有 <span class="math">θ<sub>d</sub></span> 的完整代数推导（逐行拆解）</h4>
+
+    <p>假设词向量维度为 <span class="math">D</span>，我们将每两个连续维度 <span class="math">(2d, 2d+1)</span> 视为一个二维平面，进行独立的旋转操作。</p>
+
+    <p><strong>第 1 步：定义旋转操作</strong><br>
+    对于位于位置索引 <span class="math">m</span> 的 Token，其 Query 向量在维度对 <span class="math">(2d, 2d+1)</span> 上的原始二维投影为 <span class="math">q<sup>(d)</sup></span>。经过 RoPE 旋转后，得到：</p>
+    <div class="math-block">
+        <span class="math">q<sub>m</sub><sup>(d)</sup> = R(m · θ<sub>d</sub>) · q<sup>(d)</sup></span>
+    </div>
+    <p>同理，位于位置索引 <span class="math">n</span> 的 Token 的 Key 向量旋转后为：</p>
+    <div class="math-block">
+        <span class="math">k<sub>n</sub><sup>(d)</sup> = R(n · θ<sub>d</sub>) · k<sup>(d)</sup></span>
+    </div>
+    <p>（注：<span class="math">q<sup>(d)</sup></span> 和 <span class="math">k<sup>(d)</sup></span> 是旋转发生前、由网络上层传来的原始向量。）</p>
+
+    <p><strong>第 2 步：计算该维度对的注意力分数（点积）</strong><br>
+    Transformer 计算注意力权重时，需要计算 Query 和 Key 的内积：</p>
+    <div class="math-block">
+        <span class="math">Score<sup>(d)</sup> = (q<sub>m</sub><sup>(d)</sup>)<sup>⊤</sup> · k<sub>n</sub><sup>(d)</sup></span>
+    </div>
+    <p>将第 1 步的旋转后表达式代入：</p>
+    <div class="math-block">
+        <span class="math">Score<sup>(d)</sup> = ( R(mθ<sub>d</sub>) · q<sup>(d)</sup> )<sup>⊤</sup> · ( R(nθ<sub>d</sub>) · k<sup>(d)</sup> )</span>
+    </div>
+
+    <p><strong>第 3 步：转置运算法则（拆开括号）</strong><br>
+    根据线性代数中的转置法则 <span class="math">(A · B)<sup>⊤</sup> = B<sup>⊤</sup> · A<sup>⊤</sup></span>，展开上式：</p>
+    <div class="math-block">
+        <span class="math">Score<sup>(d)</sup> = (q<sup>(d)</sup>)<sup>⊤</sup> · R(mθ<sub>d</sub>)<sup>⊤</sup> · R(nθ<sub>d</sub>) · k<sup>(d)</sup></span>
+    </div>
+
+    <p><strong>第 4 步：利用旋转矩阵的核心性质（正交性）</strong><br>
+    旋转矩阵 <span class="math">R</span> 是标准正交矩阵。其最重要的性质是：<strong>转置等于逆矩阵，等价于反向旋转</strong>。<br>
+    即：</p>
+    <div class="math-block">
+        <span class="math">R(mθ<sub>d</sub>)<sup>⊤</sup> = R(−mθ<sub>d</sub>)</span>
+    </div>
+    <p>将此关系代入第 3 步的等式中：</p>
+    <div class="math-block">
+        <span class="math">Score<sup>(d)</sup> = (q<sup>(d)</sup>)<sup>⊤</sup> · R(−mθ<sub>d</sub>) · R(nθ<sub>d</sub>) · k<sup>(d)</sup></span>
+    </div>
+
+    <p><strong>第 5 步：合并旋转角度（见证 <span class="math">m·θ<sub>d</sub></span> 和 <span class="math">n·θ<sub>d</sub></span> 消去的关键）</strong><br>
+    旋转矩阵遵循<strong>角度叠加原理</strong>：先旋转 <span class="math">−mθ<sub>d</sub></span> 角度，再接着旋转 <span class="math">nθ<sub>d</sub></span> 角度，等价于直接一次性旋转 <span class="math">(n−m)θ<sub>d</sub></span> 角度。<br>
+    数学表达式为：</p>
+    <div class="math-block">
+        <span class="math">R(−mθ<sub>d</sub>) · R(nθ<sub>d</sub>) = R(nθ<sub>d</sub> − mθ<sub>d</sub>) = R( (n−m)θ<sub>d</sub> )</span>
+    </div>
+
+    <p><strong>第 6 步：代回并得出最终结论</strong><br>
+    将第 5 步的合并结果代回第 4 步的等式：</p>
+    <div class="math-block">
+        <span class="math">Score<sup>(d)</sup> = (q<sup>(d)</sup>)<sup>⊤</sup> · R( (n−m)θ<sub>d</sub> ) · k<sup>(d)</sup></span>
+    </div>
+
+    <h4>4.1.3 结论解读（回答“绝对位置去哪了”）</h4>
+
+    <p>观察第 6 步的最终公式，我们清晰地看到：</p>
+    <ol>
+        <li><strong>独立项消失</strong>：原先公式中独立的 <span class="math">mθ<sub>d</sub></span> 和 <span class="math">nθ<sub>d</sub></span> <strong>在代数运算中完全相互抵消了</strong>，最终只剩下二者的差值 <span class="math">(n−m)θ<sub>d</sub></span>。</li>
+        <li><strong>结果定义</strong>：我们将整个式子定义为关于相对距离的函数 <span class="math">f<sub>d</sub></span>：</li>
+    </ol>
+    <div class="math-block">
+        <span class="math">Score<sup>(d)</sup> = f<sub>d</sub>( q<sup>(d)</sup>, k<sup>(d)</sup>, n−m )</span>
+    </div>
+
+    <div class="highlight-box">
+        <strong>这意味着：</strong><br>
+        • 模型计算注意力分数时，<strong>完全不依赖于词所在的绝对位置（第几位）</strong>；<br>
+        • 只取决于两个词之间的<strong>相对距离（相隔多远）</strong>。<br>
+        这就是 RoPE 拥有强大外推能力（即使推理长度超过训练长度数倍，性能衰减依然极小）的根本数学原因。
+    </div>
+
+    <p style="margin-top: 1.5rem; color: #475569; font-size: 0.95rem;">以上为 RoPE 数学直觉的完整推导，保留了 <span class="math">θ<sub>d</sub></span> 的完整下标，并展示了其在代数合并过程中的精确消去路径。</p>
     <h3>4.2 KV Cache——推理加速的“空间换时间”基石</h3>
     <p>在自回归生成（Decode阶段）中，每生成一个新Token，前面所有Token的Key（键）和Value（值）矩阵<strong>在本质上不会改变</strong>。</p>
     <ul>
